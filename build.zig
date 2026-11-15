@@ -5,7 +5,7 @@ pub const ios = @import("tools/ios/bundle.zig");
 /// Android APKs, likewise: `@import("nanoui").android.apk(b, lib, .{ .name = "Notes", .id = "com.example.notes" })`.
 pub const android = @import("tools/android/apk.zig");
 
-const examples = [_][]const u8{ "hello", "counter", "gallery", "ruler", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop", "scenes" };
+const examples = [_][]const u8{ "hello", "counter", "gallery", "ruler", "duo", "board", "basics", "map", "turn", "access", "todo", "browser", "drop", "scenes" };
 const frameworks = [_][]const u8{ "AppKit", "WebKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 const ios_frameworks = [_][]const u8{ "UIKit", "CoreLocation", "MapKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 
@@ -120,10 +120,6 @@ pub fn build(b: *std.Build) void {
         }
     }
     // Elsewhere GTK is loaded when the app starts (dlopen): nothing to link.
-    // HTTP there is http-zig's (nanoui.http), fetched only for those targets.
-    if (os != .macos and os != .ios) {
-        if (b.lazyDependency("http_zig", .{ .target = target, .optimize = optimize })) |d| nanoui.addImport("http_zig", d.module("http_zig"));
-    }
 
     // nui: the command that makes and checks apps (tools/nui).
     const nui_options = b.addOptions();
