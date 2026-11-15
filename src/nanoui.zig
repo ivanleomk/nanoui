@@ -79,8 +79,6 @@ pub const android = if (is_android) @import("android/main.zig") else struct {};
 /// The Objective-C runtime (macOS and iOS).
 pub const objc = if (mac or builtin.os.tag == .ios) @import("objc.zig") else struct {};
 pub const ui = @import("ui/ui.zig");
-/// HTTP requests answered on the main thread (http.zig).
-pub const http = @import("http.zig");
 /// Haptic taps (iOS; nothing elsewhere).
 pub const haptics = @import("basics/haptics.zig");
 /// The device's location (iOS, Core Location).
@@ -140,12 +138,6 @@ pub const Directory = plat.desktop.Directory;
 pub const path = plat.desktop.path;
 pub const isDark = plat.desktop.isDark;
 pub const accentColor = plat.desktop.accentColor;
-/// Updates from GitHub's releases for a signed app bundle (macOS).
-pub const update = @import("update.zig");
-pub const Updater = update.Updater;
-pub const UpdateOptions = update.Options;
-/// Restarting into an update unseen (`Updater.autoRestart`).
-pub const UpdateAuto = update.Auto;
 /// Runs the event loop for a while (headless tests: replies, processes, timers).
 pub const runFor = @import("platform.zig").runFor;
 
@@ -179,19 +171,14 @@ test {
     _ = @import("tests_page.zig");
     std.testing.refAllDecls(kit);
     _ = @import("menu_types.zig");
-    _ = @import("update.zig");
-    _ = @import("update_auto.zig");
     // Pure, and tested on every platform: the rest of src/ios only compiles for iOS.
     _ = @import("ios/key_repeat.zig");
     _ = @import("basics/kv_file.zig");
-    _ = @import("http.zig");
     _ = haptics;
     _ = location;
     _ = map;
     _ = directions;
     _ = kv;
-    // The updater is for desktop apps; iOS updates through the App Store.
-    if (builtin.os.tag != .ios) _ = @import("update_portable.zig");
     // The Windows tray's menu model and callback decoding, platform-free.
     if (builtin.os.tag != .ios) _ = @import("windows/tray_model.zig");
     // The Linux tray's menu tree and its pixels, platform-free too.
