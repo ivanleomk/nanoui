@@ -131,7 +131,8 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
     const th = c.theme;
     const style: types.TextStyle = .{ .size = opts.size, .weight = opts.weight, .mono = opts.mono };
     const pad: types.Edges = if (opts.bare) .{} else .xy(10, 7);
-    const lh = c.text.font(style).lineHeight() * opts.leading;
+    const base_lh = c.text.font(style).lineHeight();
+    const lh = base_lh * opts.leading;
     const i = c.open(.{
         .width = opts.width,
         .padding = pad,
@@ -271,14 +272,15 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
     if (s.len == 0) {
         _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = opts.placeholder, .style = style, .color = th.muted } }, null);
     } else for (lines, 0..) |l, n| {
-        const y = @as(f32, @floatFromInt(n)) * lh - e.scroll_y;
-        if (y + lh < 0 or y > view_h or l.end == l.start) continue;
+        const y = @as(f32, @floatFromInt(n)) * lh - e.scroll_y + (lh - base_lh) * 0.5;
+        if (y + base_lh < 0 or y > view_h or l.end == l.start) continue;
         const line_spans = sliceSpans(c.alloc(), opts.spans, l.start, l.end);
         _ = c.leaf(.{ .absolute = true, .offset = .{ .y = y } }, .{ .text = .{ .str = s[l.start..l.end], .style = style, .color = opts.color orelse th.text, .spans = line_spans } }, null);
     }
     if (focused) if (e.marked) |m| spanRects(c, s, style, opts.spans, lines, m[0], m[1], lh, e.scroll_y, opts.color orelse th.text, true);
+    const caret_top = caret_y - e.scroll_y + (lh - base_lh) * 0.5;
     if (focused and hi == lo and textedit.caretVisible(c))
-        _ = c.leaf(.{ .absolute = true, .width = .{ .px = opts.caret_width }, .height = .{ .px = lh }, .background = opts.caret_color orelse th.accent, .offset = .{ .x = caret_x, .y = caret_y - e.scroll_y } }, .none, null);
+        _ = c.leaf(.{ .absolute = true, .width = .{ .px = opts.caret_width }, .height = .{ .px = base_lh }, .background = opts.caret_color orelse th.accent, .offset = .{ .x = caret_x, .y = caret_top } }, .none, null);
     if (focused) {
         c.focused_multiline = true;
         c.focused_password = false;
@@ -289,7 +291,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
             .caret = e.caret,
             .anchor = e.anchor,
             .marked = e.marked,
-            .caret_rect = .{ .x = r.x + pad.left + caret_x, .y = r.y + pad.top + caret_y - e.scroll_y, .w = opts.caret_width, .h = lh },
+            .caret_rect = .{ .x = r.x + pad.left + caret_x, .y = r.y + pad.top + caret_top, .w = opts.caret_width, .h = base_lh },
         };
     }
     return result;
