@@ -15,6 +15,7 @@ pub const AreaOptions = struct {
     placeholder: []const u8 = "",
     width: types.Length = .fill,
     size: f32 = 13,
+    leading: f32 = 1.0,
     weight: types.Weight = .regular,
     mono: bool = false,
     spans: []const types.Span = &.{},
@@ -26,6 +27,7 @@ pub const AreaOptions = struct {
     bare: bool = true,
     selection_color: ?types.Color = null,
     caret_color: ?types.Color = null,
+    caret_width: f32 = 1.5,
     /// The typed text's color (the theme's text when null).
     color: ?types.Color = null,
 };
@@ -129,7 +131,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
     const th = c.theme;
     const style: types.TextStyle = .{ .size = opts.size, .weight = opts.weight, .mono = opts.mono };
     const pad: types.Edges = if (opts.bare) .{} else .xy(10, 7);
-    const lh = c.text.font(style).lineHeight();
+    const lh = c.text.font(style).lineHeight() * opts.leading;
     const i = c.open(.{
         .width = opts.width,
         .padding = pad,
@@ -276,7 +278,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
     }
     if (focused) if (e.marked) |m| spanRects(c, s, style, opts.spans, lines, m[0], m[1], lh, e.scroll_y, opts.color orelse th.text, true);
     if (focused and hi == lo and textedit.caretVisible(c))
-        _ = c.leaf(.{ .absolute = true, .width = .{ .px = 1.5 }, .height = .{ .px = lh }, .background = opts.caret_color orelse th.accent, .offset = .{ .x = caret_x, .y = caret_y - e.scroll_y } }, .none, null);
+        _ = c.leaf(.{ .absolute = true, .width = .{ .px = opts.caret_width }, .height = .{ .px = lh }, .background = opts.caret_color orelse th.accent, .offset = .{ .x = caret_x, .y = caret_y - e.scroll_y } }, .none, null);
     if (focused) {
         c.focused_multiline = true;
         c.focused_password = false;
@@ -287,7 +289,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
             .caret = e.caret,
             .anchor = e.anchor,
             .marked = e.marked,
-            .caret_rect = .{ .x = r.x + pad.left + caret_x, .y = r.y + pad.top + caret_y - e.scroll_y, .w = 1.5, .h = lh },
+            .caret_rect = .{ .x = r.x + pad.left + caret_x, .y = r.y + pad.top + caret_y - e.scroll_y, .w = opts.caret_width, .h = lh },
         };
     }
     return result;
