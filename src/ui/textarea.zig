@@ -7,6 +7,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const tf = @import("textfield.zig");
 const textedit = @import("textedit.zig");
+const rich = @import("rich.zig");
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const EditState = ctx_mod.EditState;
@@ -14,6 +15,9 @@ pub const AreaOptions = struct {
     placeholder: []const u8 = "",
     width: types.Length = .fill,
     size: f32 = 13,
+    weight: types.Weight = .regular,
+    mono: bool = false,
+    spans: []const types.Span = &.{},
     min_lines: u8 = 1,
     max_lines: u8 = 8,
     /// Return submits; with Shift or Option it breaks the line.
@@ -55,41 +59,75 @@ fn lineAt(lines: []const Line, pos: usize) usize {
     return i;
 }
 
-fn caretX(c: *Context, s: []const u8, style: types.TextStyle, l: Line, pos: usize) f32 {
-    return c.text.caretX(s[l.start..l.end], style, @min(pos, l.end) -| l.start);
+fn caretX(c: *Context, s: []const u8, style: types.TextStyle, spans: []const types.Span, l: Line, pos: usize) f32 {
+    const to = @min(pos, l.end) -| l.start;
+    if (to == 0) return 0;
+    if (spans.len > 0 and rich.styled(spans)) {
+        return rich.layout(c.text, s[l.start .. l.start + to], style, spans, l.start).width;
+    }
+    return c.text.caretX(s[l.start..l.end], style, to);
 }
 
 /// The byte under `x` on line `i`.
-fn indexOn(c: *Context, s: []const u8, style: types.TextStyle, lines: []const Line, i: usize, x: f32) usize {
+fn indexOn(c: *Context, s: []const u8, style: types.TextStyle, spans: []const types.Span, lines: []const Line, i: usize, x: f32) usize {
     const l = lines[@min(i, lines.len - 1)];
-    return l.start + c.text.indexAt(s[l.start..l.end], style, x);
+    if (spans.len == 0 or !rich.styled(spans)) {
+        return l.start + c.text.indexAt(s[l.start..l.end], style, x);
+    }
+    const line_s = s[l.start..l.end];
+    var best: usize = 0;
+    var prev_x: f32 = 0;
+    var j: usize = 0;
+    while (j < line_s.len) {
+        const clen = std.unicode.utf8ByteSequenceLength(line_s[j]) catch 1;
+        const next_j = @min(j + clen, line_s.len);
+        const cur_x = rich.layout(c.text, line_s[0..next_j], style, spans, l.start).width;
+        if (x < (prev_x + cur_x) * 0.5) break;
+        best = next_j;
+        prev_x = cur_x;
+        j = next_j;
+    }
+    return l.start + best;
 }
 
 /// ↑ or ↓: the caret to the line above or below, at about the same x.
-fn vertical(c: *Context, s: []const u8, style: types.TextStyle, w: f32, e: *EditState, down: bool, extend: bool) void {
+fn vertical(c: *Context, s: []const u8, style: types.TextStyle, spans: []const types.Span, w: f32, e: *EditState, down: bool, extend: bool) void {
     const lines = linesOf(c, s, style, w);
     const i = lineAt(lines, e.caret);
-    const x = caretX(c, s, style, lines[i], e.caret);
-    const to = if (down) (if (i + 1 < lines.len) indexOn(c, s, style, lines, i + 1, x) else s.len) else if (i > 0) indexOn(c, s, style, lines, i - 1, x) else 0;
+    const x = caretX(c, s, style, spans, lines[i], e.caret);
+    const to = if (down) (if (i + 1 < lines.len) indexOn(c, s, style, spans, lines, i + 1, x) else s.len) else if (i > 0) indexOn(c, s, style, spans, lines, i - 1, x) else 0;
     e.caret = to;
     if (!extend) e.anchor = to;
 }
 
 /// Fills bytes [lo, hi) line by line: the selection, the composition's underline.
-fn spanRects(c: *Context, s: []const u8, style: types.TextStyle, lines: []const Line, lo: usize, hi: usize, lh: f32, scroll: f32, color: types.Color, under: bool) void {
+fn spanRects(c: *Context, s: []const u8, style: types.TextStyle, spans: []const types.Span, lines: []const Line, lo: usize, hi: usize, lh: f32, scroll: f32, color: types.Color, under: bool) void {
     for (lines, 0..) |l, i| {
         if (hi <= l.start or lo > l.end or (lo == l.end and hi > lo and i + 1 < lines.len and lines[i + 1].start == l.end)) continue;
-        const x0 = caretX(c, s, style, l, @max(lo, l.start));
+        const x0 = caretX(c, s, style, spans, l, @max(lo, l.start));
         // Past the end of the line: its newline is selected too.
-        const x1 = caretX(c, s, style, l, hi) + @as(f32, if (hi > l.end and !under) 4 else 0);
+        const x1 = caretX(c, s, style, spans, l, hi) + @as(f32, if (hi > l.end and !under) 4 else 0);
         const y = @as(f32, @floatFromInt(i)) * lh - scroll;
         _ = c.leaf(.{ .absolute = true, .width = .{ .px = @max(0, x1 - x0) }, .height = .{ .px = if (under) 1.5 else lh }, .radius = if (under) 0 else 2, .background = color, .offset = .{ .x = x0, .y = if (under) y + lh - 1 else y } }, .none, null);
     }
 }
 
+fn sliceSpans(alloc: std.mem.Allocator, spans: []const types.Span, start: usize, end: usize) []const types.Span {
+    if (spans.len == 0) return &.{};
+    var out: std.ArrayList(types.Span) = .empty;
+    for (spans) |sp| {
+        if (sp.end <= start or sp.start >= end) continue;
+        var s = sp;
+        s.start = @intCast(@max(sp.start, start) - start);
+        s.end = @intCast(@min(sp.end, end) - start);
+        out.append(alloc, s) catch break;
+    }
+    return out.items;
+}
+
 pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Result {
     const th = c.theme;
-    const style: types.TextStyle = .{ .size = opts.size };
+    const style: types.TextStyle = .{ .size = opts.size, .weight = opts.weight, .mono = opts.mono };
     const pad: types.Edges = if (opts.bare) .{} else .xy(10, 7);
     const lh = c.text.font(style).lineHeight();
     const i = c.open(.{
@@ -137,10 +175,10 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
             const x = c.input.mouse.x - r.x - pad.left;
             const row: usize = @intFromFloat(@max(0, (c.input.mouse.y - r.y - pad.top + e.scroll_y) / lh));
             if (c.input.pressed and c.input.button == .left and !c.input.ctrl and it.hovered) {
-                const at = indexOn(c, buffer.text(), style, lines, row, x);
+                const at = indexOn(c, buffer.text(), style, opts.spans, lines, row, x);
                 textedit.pointerSelect(c, e, buffer.text(), at, true);
             } else if (e.selecting and c.input.down) {
-                const at = indexOn(c, buffer.text(), style, lines, row, x);
+                const at = indexOn(c, buffer.text(), style, opts.spans, lines, row, x);
                 textedit.pointerDrag(c, e, buffer.text(), at, true);
             }
             if (!c.input.down) e.selecting = false;
@@ -160,7 +198,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
                     continue;
                 },
                 .move_up, .move_down, .select_up, .select_down => |m| {
-                    vertical(c, buffer.text(), style, w, e, m == .move_down or m == .select_down, m == .select_up or m == .select_down);
+                    vertical(c, buffer.text(), style, opts.spans, w, e, m == .move_down or m == .select_down, m == .select_up or m == .select_down);
                     continue;
                 },
                 // Tab and Shift-Tab move the focus, as in a text field
@@ -182,7 +220,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
             if (tf.commandOf(k, c.input.shift, c.input.ctrl or c.input.alt)) |cmd| {
                 tf.apply(buffer, e, .{ .command = cmd }, field, c.clipboard, &result);
             } else switch (k) {
-                .up, .down => vertical(c, buffer.text(), style, w, e, k == .down, c.input.shift),
+                .up, .down => vertical(c, buffer.text(), style, opts.spans, w, e, k == .down, c.input.shift),
                 .home => tf.apply(buffer, e, .{ .command = .move_line_start }, field, c.clipboard, &result),
                 .end => tf.apply(buffer, e, .{ .command = .move_line_end }, field, c.clipboard, &result),
                 .enter => if (newline) tf.apply(buffer, e, .{ .insert = "\n" }, field, c.clipboard, &result) else {
@@ -216,7 +254,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
     const view_h = shown * lh;
     c.node(i).style.height = .{ .px = view_h + pad.vertical() };
     const cl = lineAt(lines, e.caret);
-    const caret_x = caretX(c, s, style, lines[cl], e.caret);
+    const caret_x = caretX(c, s, style, opts.spans, lines[cl], e.caret);
     const caret_y = @as(f32, @floatFromInt(cl)) * lh;
     // Keep the caret in view.
     if (focused) {
@@ -227,15 +265,16 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
 
     const lo = @min(e.caret, e.anchor);
     const hi = @max(e.caret, e.anchor);
-    if (focused and hi > lo) spanRects(c, s, style, lines, lo, hi, lh, e.scroll_y, opts.selection_color orelse th.accent.alpha(0.28), false);
+    if (focused and hi > lo) spanRects(c, s, style, opts.spans, lines, lo, hi, lh, e.scroll_y, opts.selection_color orelse th.accent.alpha(0.28), false);
     if (s.len == 0) {
         _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = opts.placeholder, .style = style, .color = th.muted } }, null);
     } else for (lines, 0..) |l, n| {
         const y = @as(f32, @floatFromInt(n)) * lh - e.scroll_y;
         if (y + lh < 0 or y > view_h or l.end == l.start) continue;
-        _ = c.leaf(.{ .absolute = true, .offset = .{ .y = y } }, .{ .text = .{ .str = s[l.start..l.end], .style = style, .color = opts.color orelse th.text } }, null);
+        const line_spans = sliceSpans(c.alloc(), opts.spans, l.start, l.end);
+        _ = c.leaf(.{ .absolute = true, .offset = .{ .y = y } }, .{ .text = .{ .str = s[l.start..l.end], .style = style, .color = opts.color orelse th.text, .spans = line_spans } }, null);
     }
-    if (focused) if (e.marked) |m| spanRects(c, s, style, lines, m[0], m[1], lh, e.scroll_y, opts.color orelse th.text, true);
+    if (focused) if (e.marked) |m| spanRects(c, s, style, opts.spans, lines, m[0], m[1], lh, e.scroll_y, opts.color orelse th.text, true);
     if (focused and hi == lo and textedit.caretVisible(c))
         _ = c.leaf(.{ .absolute = true, .width = .{ .px = 1.5 }, .height = .{ .px = lh }, .background = opts.caret_color orelse th.accent, .offset = .{ .x = caret_x, .y = caret_y - e.scroll_y } }, .none, null);
     if (focused) {
