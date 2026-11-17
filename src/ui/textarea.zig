@@ -102,6 +102,19 @@ fn vertical(c: *Context, s: []const u8, style: types.TextStyle, spans: []const t
     if (!extend) e.anchor = to;
 }
 
+/// Home/End/⌘←/⌘→: the caret to the start or end of its visual line.
+fn horizontalLine(c: *Context, s: []const u8, style: types.TextStyle, w: f32, e: *EditState, to_end: bool, extend: bool) void {
+    const lines = linesOf(c, s, style, w);
+    const i = lineAt(lines, e.caret);
+    const l = lines[i];
+    var to = if (to_end) l.end else l.start;
+    if (to_end and i + 1 < lines.len and l.end == lines[i + 1].start and l.end > l.start and s[l.end - 1] == ' ') {
+        to = l.end - 1;
+    }
+    e.caret = to;
+    if (!extend) e.anchor = to;
+}
+
 /// Fills bytes [lo, hi) line by line: the selection, the composition's underline.
 fn spanRects(c: *Context, s: []const u8, style: types.TextStyle, spans: []const types.Span, lines: []const Line, lo: usize, hi: usize, lh: f32, scroll: f32, color: types.Color, under: bool) void {
     for (lines, 0..) |l, i| {
@@ -204,6 +217,10 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
                     vertical(c, buffer.text(), style, opts.spans, w, e, m == .move_down or m == .select_down, m == .select_up or m == .select_down);
                     continue;
                 },
+                .move_line_start, .move_line_end, .select_line_start, .select_line_end => |m| {
+                    horizontalLine(c, buffer.text(), style, w, e, m == .move_line_end or m == .select_line_end, m == .select_line_start or m == .select_line_end);
+                    continue;
+                },
                 // Tab and Shift-Tab move the focus, as in a text field
                 // (AppKit sends insertTab: here: the window's own Tab
                 // handling skips multiline fields).
@@ -218,14 +235,17 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
         // Without an input method (tests, synthetic input): keys and chars.
         if (c.input.chars.len > 0) tf.apply(buffer, e, .{ .insert = c.input.chars }, field, c.clipboard, &result);
         if (!took_undo) if (c.input.key) |k| {
+            // Command+←/→ moves to the start/end of the visual line;
             // Control (Option, as on the Mac) with ←, →, Delete and
             // Backspace works a word at a time (`tf.commandOf`).
-            if (tf.commandOf(k, c.input.shift, c.input.ctrl or c.input.alt)) |cmd| {
+            if (c.input.cmd and (k == .left or k == .right)) {
+                horizontalLine(c, buffer.text(), style, w, e, k == .right, c.input.shift);
+            } else if (tf.commandOf(k, c.input.shift, c.input.ctrl or c.input.alt)) |cmd| {
                 tf.apply(buffer, e, .{ .command = cmd }, field, c.clipboard, &result);
             } else switch (k) {
                 .up, .down => vertical(c, buffer.text(), style, opts.spans, w, e, k == .down, c.input.shift),
-                .home => tf.apply(buffer, e, .{ .command = .move_line_start }, field, c.clipboard, &result),
-                .end => tf.apply(buffer, e, .{ .command = .move_line_end }, field, c.clipboard, &result),
+                .home => horizontalLine(c, buffer.text(), style, w, e, false, c.input.shift),
+                .end => horizontalLine(c, buffer.text(), style, w, e, true, c.input.shift),
                 .enter => if (newline) tf.apply(buffer, e, .{ .insert = "\n" }, field, c.clipboard, &result) else {
                     result.submitted = true;
                 },

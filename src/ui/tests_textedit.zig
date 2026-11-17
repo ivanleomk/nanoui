@@ -411,6 +411,53 @@ test "multiline textArea preserves newlines on paste" {
     try testing.expectEqualStrings("line one\nline two\nline three", a.buf.text());
 }
 
+test "textArea Cmd+Left/Right and line_start/line_end move on visual wrapped lines" {
+    const Area = struct {
+        buf: ui.TextBuffer = .{},
+        fn view(s: *@This(), cx: *ui.Context) void {
+            ui.column(cx, .{ .padding = .all(12), .width = .fill });
+            defer ui.end(cx);
+            _ = ui.textArea(cx, &s.buf, .{ .min_lines = 1, .max_lines = 6 });
+        }
+    };
+    var a: Area = .{};
+    defer a.buf.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&a, Area.view), .{ .width = 160, .height = 200 });
+    defer t.deinit();
+    t.settle(1);
+    t.click(20, 20);
+    // Long single paragraph that wraps across multiple visual lines at width=160.
+    t.textOps(&.{.{ .insert = "alpha bravo charlie delta echo foxtrot" }});
+    t.settle(1);
+    const e = @import("textfield.zig").editState(&t.ctx, t.ctx.focus, &a.buf).?;
+    const total = a.buf.text().len;
+    try testing.expectEqual(total, e.caret);
+
+    // move_line_start moves to start of the LAST visual line, not 0.
+    t.textOps(&.{.{ .command = .move_line_start }});
+    try testing.expect(e.caret > 0);
+    try testing.expect(e.caret < total);
+    const last_line_start = e.caret;
+
+    // Cmd+Right (via key + cmd) moves back to end of that visual line.
+    t.ctx.input.cmd = true;
+    t.key(.right);
+    t.ctx.input.cmd = false;
+    try testing.expectEqual(total, e.caret);
+
+    // Cmd+Left (via key + cmd) moves to start of that visual line.
+    t.ctx.input.cmd = true;
+    t.key(.left);
+    t.ctx.input.cmd = false;
+    try testing.expectEqual(last_line_start, e.caret);
+
+    // select_line_end extends selection to end of visual line.
+    t.textOps(&.{.{ .command = .select_line_end }});
+    try testing.expectEqual(last_line_start, e.anchor);
+    try testing.expectEqual(total, e.caret);
+}
+
 test {
     _ = @import("textedit.zig");
     _ = @import("scroll.zig");
